@@ -26,8 +26,9 @@ def _gps_at(track: DevicePoseTrack, t: float):
         return None
     times = [f.timestamp for f in fixes]
     hi = int(np.searchsorted(times, t))
-    if hi == 0:
-        return fixes[0]
+    if hi == 0:  # t equals the first fix's time
+        a = fixes[0]
+        return (a.lat_deg, a.lon_deg, a.alt_m or 0.0)
     lo = hi - 1
     span = times[hi] - times[lo]
     w = (t - times[lo]) / span if span else 0.0
