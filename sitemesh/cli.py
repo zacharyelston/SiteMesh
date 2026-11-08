@@ -37,6 +37,9 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--camera-model", default="SIMPLE_RADIAL",
                            choices=["SIMPLE_RADIAL", "PINHOLE", "OPENCV"])
             p.add_argument("--seed", type=int, default=0)
+            p.add_argument("--no-affine", action="store_true",
+                           help="plain SIFT instead of affine-shape SIFT")
+            p.add_argument("--guided", action="store_true", help="guided matching (slower)")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     survey = Survey(args.survey)
@@ -59,6 +62,8 @@ def main(argv: list[str] | None = None) -> int:
             use_priors=not args.no_priors,
             camera_model=args.camera_model,
             seed=args.seed,
+            sift_affine=not args.no_affine,
+            guided_matching=args.guided,
         )
         report = run_sparse(survey, opts)
         _print({k: report.get(k) for k in (
