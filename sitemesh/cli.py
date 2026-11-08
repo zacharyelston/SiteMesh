@@ -40,6 +40,8 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--no-affine", action="store_true",
                            help="plain SIFT instead of affine-shape SIFT")
             p.add_argument("--guided", action="store_true", help="guided matching (slower)")
+            p.add_argument("--no-merge", action="store_true",
+                           help="keep only the largest sub-model instead of merging them")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     survey = Survey(args.survey)
@@ -64,6 +66,7 @@ def main(argv: list[str] | None = None) -> int:
             seed=args.seed,
             sift_affine=not args.no_affine,
             guided_matching=args.guided,
+            merge_submodels=not args.no_merge,
         )
         report = run_sparse(survey, opts)
         _print({k: report.get(k) for k in (

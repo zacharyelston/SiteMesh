@@ -10,3 +10,4 @@ data/
 *.usdz
 bench/
 runs/
+bench-merge/

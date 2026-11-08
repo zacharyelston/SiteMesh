@@ -50,6 +50,11 @@ class SfmOptions:
     sift_affine: bool = True
     sift_dsp: bool = False  # domain_size_pooling
     guided_matching: bool = False
+    # Merge disconnected sub-models through the shared ARKit frame (needs pose priors). A segment
+    # whose own VIO fit is worse than max_segment_rms_m is left out, with the reason reported.
+    merge_submodels: bool = True
+    max_segment_rms_m: float = 0.25
+    min_segment_images: int = 3
 
 
 def _intrinsics_groups(survey: Survey, frames: dict[str, DevicePoseFrame], tol: float):
@@ -257,7 +262,142 @@ def map_sparse(survey: Survey, opts: SfmOptions, n_priors: int):
     _, rec = max(maps.items(), key=lambda kv: kv[1].num_reg_images())
     # incremental_mapping writes each model to sparse/<idx>; keep the best at sparse/ itself.
     rec.write(survey.sparse)
-    return rec, len(maps)
+    return rec, maps
+
+
+def _vio_fit(rec, frames: dict):
+    """Similarity from a reconstruction's camera centres to the VIO centres, and its residual."""
+    from sitemesh.geometry import umeyama
+
+    src, dst = [], []
+    for im in rec.images.values():
+        f = frames.get(im.name)
+        if f is not None and im.has_pose:
+            src.append(np.array(im.projection_center()))
+            dst.append(np.array(f.position_m))
+    if len(src) < 3:
+        return None
+    src, dst = np.array(src), np.array(dst)
+    s, r, t = umeyama(src, dst)
+    res = np.linalg.norm(s * (r @ src.T).T + t - dst, axis=1)
+    return s, r, t, float(np.sqrt((res**2).mean())), len(src)
+
+
+def _combine(segments):
+    """One reconstruction holding every segment's cameras, rigs, posed frames and images.
+
+    Images keep their keypoints but drop their 3D links; points are re-triangulated afterwards.
+    Database ids are shared across segments, so they carry over unchanged.
+    """
+    import copy
+
+    merged = pycolmap.Reconstruction()
+    for seg in segments:
+        for cid, cam in seg.cameras.items():
+            if not merged.exists_camera(cid):
+                merged.add_camera(cam)
+        for rid, rig in seg.rigs.items():
+            if not merged.exists_rig(rid):
+                merged.add_rig(rig)
+        for fid, frame in seg.frames.items():
+            if merged.exists_frame(fid) or not frame.has_pose():  # Frame.has_pose is a method
+                continue
+            f = copy.copy(frame)
+            f.reset_rig_ptr()
+            merged.add_frame(f)
+        for iid, image in seg.images.items():
+            if merged.exists_image(iid) or not image.has_pose:
+                continue
+            im = copy.copy(image)
+            im.reset_camera_ptr()
+            im.reset_frame_ptr()
+            for p in im.points2D:
+                p.point3D_id = pycolmap.INVALID_POINT3D_ID
+            merged.add_image(im)
+    return merged
+
+
+def merge_submodels(survey: Survey, maps: dict, opts: SfmOptions):
+    """Merge disconnected sub-models through the ARKit frame they were all solved in.
+
+    incremental_mapping splits a capture wherever consecutive shots share too few features.
+    sitemesh used to keep only the largest piece: d4737a5d reconstructed 80/86 shots in three
+    pieces but kept 53, and b8b8ebd7 kept 22 of 47. Every piece was solved with the same metric
+    VIO pose priors, so each is aligned to VIO on its own (a similarity, which also exposes a
+    piece that disagrees with VIO), then all are combined. Points are re-triangulated from the
+    database with poses fixed, so any matches across the joins become shared points, and a
+    pose-prior bundle adjustment settles the joins against images and VIO together.
+
+    Returns (reconstruction or None, report). None means nothing to merge: keep the largest.
+    """
+    track = survey.poses()
+    report: dict = {"n_submodels": len(maps), "segments": [], "merged": False}
+    if track is None or len(maps) < 2:
+        return None, report
+    frames = {f.image: f for f in track.shots() if f.tracking_state == "normal"}
+    kept = []
+    for idx, seg in sorted(maps.items(), key=lambda kv: -kv[1].num_reg_images()):
+        row = {"submodel": int(idx), "n_images": seg.num_reg_images()}
+        fit = _vio_fit(seg, frames)
+        if seg.num_reg_images() < opts.min_segment_images or fit is None:
+            row.update(kept=False, reason=f"fewer than {opts.min_segment_images} images with VIO")
+        else:
+            s, r, t, rms, n = fit
+            row.update(vio_rms_m=rms, sfm_to_device_scale=float(s), n_vio=n)
+            if rms > opts.max_segment_rms_m:
+                row.update(kept=False, reason=f"VIO RMS {rms:.3f} m > {opts.max_segment_rms_m} m")
+            else:
+                seg = pycolmap.Reconstruction(seg)
+                seg.transform(pycolmap.Sim3d(s, pycolmap.Rotation3d(r), t))
+                kept.append(seg)
+                row["kept"] = True
+        report["segments"].append(row)
+    if len(kept) < 2:
+        return None, report
+
+    import tempfile
+
+    combined = _combine(kept)
+    seg_of = {}
+    for i, seg in enumerate(kept):
+        for im in seg.images.values():
+            if im.has_pose:
+                seg_of.setdefault(im.image_id, i)
+    with tempfile.TemporaryDirectory() as tmp:
+        rec = pycolmap.triangulate_points(combined, survey.database, survey.raw, tmp)
+
+    db = pycolmap.Database.open(survey.database)
+    try:
+        priors = db.read_all_pose_priors()
+    finally:
+        db.close()
+    cfg = pycolmap.BundleAdjustmentConfig()
+    for iid in rec.reg_image_ids():
+        cfg.add_image(iid)
+    ba = pycolmap.create_pose_prior_bundle_adjuster(
+        pycolmap.BundleAdjustmentOptions(), pycolmap.PosePriorBundleAdjustmentOptions(),
+        cfg, priors, rec,
+    )
+    ba.solve()
+    rec.update_point_3d_errors()  # BA does not refresh the stored per-point errors
+
+    # Points observed from more than one segment: real feature links across a join.
+    joint = sum(
+        1 for p in rec.points3D.values()
+        if len({seg_of.get(el.image_id) for el in p.track.elements}) > 1
+    )
+    fit = _vio_fit(rec, frames)
+    report.update(
+        merged=True,
+        n_segments_merged=len(kept),
+        n_registered_largest=max(seg.num_reg_images() for seg in kept),
+        n_registered_merged=rec.num_reg_images(),
+        n_joint_points=joint,
+        merged_vio_rms_m=fit[3] if fit else None,
+    )
+    log.info("merged %d sub-models: %d -> %d images, %d points across joins",
+             len(kept), report["n_registered_largest"], rec.num_reg_images(), joint)
+    return rec, report
 
 
 def device_agreement(survey: Survey, rec) -> dict:
@@ -308,8 +448,15 @@ def run_sfm(survey: Survey, opts: SfmOptions | None = None) -> tuple[object, dic
     info["n_priors"] = write_priors(survey, opts)
     info["matcher"] = match(survey, opts, info["n_priors"])
     t2 = time.time()
-    rec, n_models = map_sparse(survey, opts, info["n_priors"])
+    rec, maps = map_sparse(survey, opts, info["n_priors"])
+    n_models = len(maps)
     t3 = time.time()
+    if opts.merge_submodels and info["n_priors"] >= 3:
+        merged, info["merge"] = merge_submodels(survey, maps, opts)
+        if merged is not None:
+            rec = merged
+            rec.write(survey.sparse)
+    t4 = time.time()
     cams = []
     for cam in rec.cameras.values():
         cams.append({"model": cam.model_name, "params": list(map(float, cam.params))})
@@ -320,6 +467,6 @@ def run_sfm(survey: Survey, opts: SfmOptions | None = None) -> tuple[object, dic
         n_points3d=rec.num_points3D(),
         mean_reprojection_px=float(rec.compute_mean_reprojection_error()),
         refined_cameras=cams,
-        seconds={"extract": t1 - t0, "match": t2 - t1, "map": t3 - t2},
+        seconds={"extract": t1 - t0, "match": t2 - t1, "map": t3 - t2, "merge": t4 - t3},
     )
     return rec, info
