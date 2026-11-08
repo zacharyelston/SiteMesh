@@ -316,3 +316,72 @@ reconstructed 80/86 shots in three pieces (shots 2–15, 17–71, 73–86); b8b8
 features: 53 → 80 on d4737a5d. That's the strongest argument found for the priors, and the
 recommended next step.
 
+## 6. Merging disconnected sub-models (issue #14)
+
+For site surveys the deliverable is bulk measures over the whole site, so coverage matters more
+than per-point precision. COLMAP splits a capture wherever consecutive shots share too few
+features, and sitemesh used to keep only the largest piece. Every piece is solved against the
+same metric VIO priors, so `merge_submodels` aligns each piece to VIO on its own, combines them,
+re-triangulates from the database, and runs a pose-prior bundle adjustment. Default on;
+`--no-merge` restores keep-the-largest.
+
+```bash
+SITEMESH_BENCH_DIR=bench-merge .venv/bin/python scripts/bench.py data/d4737a5d data/b8b8ebd7 --configs priors_spatial --seeds 0 1 2
+SITEMESH_BENCH_DIR=bench-merge .venv/bin/python scripts/bench.py data/object-orbit-2 data/object-orbit --configs priors_spatial --seeds 0
+```
+
+| capture | seed | before (largest piece) | **after merge** | points | reproj px | VIO RMS mm | scene diagonal | RMS / diagonal | merge s |
+|---|---|---|---|---|---|---|---|---|---|
+| d4737a5d | 0 | 53/86 | **80/86** | 4,000 → 5,435 | 0.938 → 0.972 | 15.7 → 19.3 | 21.6 m | 0.09% | 0.5 |
+| d4737a5d | 1 | — | **80/86** | 5,274 | 0.967 | 21.0 | | | 0.8 |
+| d4737a5d | 2 | — | **66/86** | 4,501 | 0.953 | 21.0 | | | 0.5 |
+| b8b8ebd7 | 0 | 22/77 | **47/77** | 4,902 → 10,534 | 0.766 → 0.846 | 133.1 → 90.2 | 45.8 m | 0.20% | 1.0 |
+| b8b8ebd7 | 1 | — | **47/77** | 10,503 | 0.844 | 90.1 | | | 0.9 |
+| b8b8ebd7 | 2 | — | **47/77** | 10,453 | 0.843 | 90.2 | | | 1.1 |
+| object-orbit-2 | 0 | 85/85 | 85/85 (one piece, untouched) | 14,424 | 0.822 | 20.1 | 7.7 m | 0.26% | 0.0 |
+| object-orbit | 0 | 44/44 | 44/44 (one piece, untouched) | 5,009 | 0.936 | 5.1 | 3.0 m | 0.17% | 0.0 |
+
+"Before" is the seed-0 default run from §2. "Scene diagonal" is the horizontal 2nd–98th
+percentile extent of the merged point cloud.
+
+### Per-piece VIO fit (seed 0)
+
+| capture | piece | images | own VIO RMS | kept |
+|---|---|---|---|---|
+| d4737a5d | largest | 53 | 16 mm | yes |
+| | | 14 | 12 mm | yes |
+| | | 13 | 31 mm | yes |
+| b8b8ebd7 | largest | 22 | 134 mm | yes |
+| | | 15 | 131 mm | yes |
+| | | 14 | 13 mm | yes |
+| | | 11 | 9 mm | yes |
+
+### What it means
+
+- **Coverage:** +27 shots on d4737a5d and +25 on b8b8ebd7 land in one metric model. The merge
+  costs about 1 s.
+- **The joins rest on VIO alone.** `n_joint_points` is **0** on every real capture: no
+  feature track crosses a join, so each piece's placement relative to the others comes from ARKit
+  tracking, accurate to roughly that piece's own VIO RMS (9–134 mm here). That's adequate for
+  bulk measures (0.09–0.20% of the scene); it's not a photogrammetric tie.
+- **Still in `enu`, and still Z-up.** Both hard captures were already `enu` before merging (the
+  largest piece walked over 3 m). Merging lengthens the walk the GPS heading is fitted over: 7.3
+  → 8.2 m (d4737a5d) and 7.2 → 12.5 m (b8b8ebd7). `frame_check.py` on the merged models: dominant
+  plane tilt 0.08° (d4737a5d, a corridor ceiling with cameras about 1 m below) and 0.12°
+  (b8b8ebd7, ground with cameras 1.1–2.1 m above). Rotation RMS 0.55–1.0°.
+- **Reprojection rises** slightly (+0.03–0.08 px) because the pieces are held by VIO rather than
+  shared features. It stays under 1.0 px.
+- **Rejection works, but the outcome varies with seed.** On d4737a5d seed 2 the mapper split
+  differently and produced a 6-image piece that disagrees with VIO by **0.32 m**. It was dropped
+  (`max_segment_rms_m = 0.25`), leaving 66/86 instead of 80/86. The threshold keeps every piece
+  seen so far (≤ 134 mm) and drops that degenerate one. Its value is a judgement from these 21
+  pieces, not a fit.
+- **Gate:** the merged hard captures still `fail` the gate. They're under 98% registration, and
+  their VIO RMS is over the 10 mm target. The target is unchanged (see Not yet done).
+
+### Not yet done
+
+- Shots that never reconstructed (d4737a5d 6, b8b8ebd7 30) are still missing. With priors they
+  could be placed from VIO and triangulated against neighbours. Not tried.
+- The gate's 10 mm VIO target suits object scans, not 20–50 m sites. A relative target
+  (RMS / scene size) would match how bulk measures are used. Not changed without a decision.

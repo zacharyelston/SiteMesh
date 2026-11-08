@@ -79,6 +79,7 @@ def run_one(capture: Path, config: str, seed: int, extra: list[str]) -> dict:
             seconds_total=r.get("seconds_total"), output_frame=r.get("output_frame"),
             gate=r.get("gate", {}).get("verdict"),
             mapper_loaded_priors=_mapper_priors(log),
+            merge=r.get("merge"), n_models=r.get("n_models"),
         )
     return row
 

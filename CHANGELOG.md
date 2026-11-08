@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.2: merge disconnected sub-models (2026-11-08)
+
+### Added
+- `merge_submodels` (default on, `--no-merge` to disable): every COLMAP sub-model is aligned to
+  VIO, combined, re-triangulated, and refined with a pose-prior BA. Pieces whose own VIO RMS
+  exceeds 0.25 m are dropped, with the reason in `report.json` → `merge`.
+
+### Verified
+- d4737a5d 53 → **80/86** (seeds 0, 1; seed 2: 66/86, one degenerate piece dropped at 0.32 m).
+  b8b8ebd7 22 → **47/77** on all seeds. Orbits unchanged.
+- Merged models stay Z-up (plane tilt 0.08° / 0.12°) and in `enu`. VIO RMS 19 mm / 90 mm =
+  0.09% / 0.20% of the scene diagonal. Reprojection under 1.0 px. Merge cost about 1 s.
+
+### Not verified
+- No feature track crosses any join on these captures (`n_joint_points` = 0), so the joins are
+  only as good as ARKit tracking. Not independently checked against a known distance.
+- The 0.25 m rejection threshold is set from 21 observed pieces, not fitted.
+- Merged registration on d4737a5d varies with seed (80 / 80 / 66).
+
 ## 0.1.1: takeover, first real-data runs (2026-11-08)
 
 All measurements are on one Apple M6 laptop (12 cores, 32 GB, CPU pycolmap 4.1.1), the
