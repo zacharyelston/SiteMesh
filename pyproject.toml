@@ -26,3 +26,5 @@ line-length = 100
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: end-to-end SfM on real capture data (run with -m slow; needs data/)"]
+addopts = "-m 'not slow'"

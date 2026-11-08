@@ -81,8 +81,19 @@ Outputs go to `<survey>/model/`:
 
 ## Status
 
-- Sparse, georegistration, QC, scale check and gate run on Apple Silicon (CPU pycolmap 4.1.1).
-- The dense stage is written against pycolmap's API but **has not been run**: it needs a CUDA
-  build of pycolmap.
+See `CHANGELOG.md` for what is verified and what is not, and `docs/results.md` for the numbers.
+
+- Sparse, georegistration, QC and the gate run end to end on Apple Silicon (CPU pycolmap 4.1.1)
+  on all four reference captures. object-orbit-2 85/85, object-orbit 44/44.
+- The dense stage **has not been run**: it needs a CUDA build of pycolmap. Without CUDA it
+  returns `status: skipped` and writes nothing.
 - The scale check is tested on synthetic renders only. No real capture with printed tags has
   been run through it yet.
+
+## Tests and benchmarks
+
+```bash
+.venv/bin/ruff check sitemesh tests scripts && .venv/bin/python -m pytest -q   # fast, as CI
+SITEMESH_TEST_CAPTURE=data/object-orbit .venv/bin/python -m pytest -m slow      # real-data SfM
+.venv/bin/python scripts/bench.py data/object-orbit --seeds 0 1 2              # config x seed table
+```
