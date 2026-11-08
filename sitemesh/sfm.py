@@ -153,6 +153,37 @@ def write_priors(survey: Survey, opts: SfmOptions) -> int:
     return n
 
 
+def _match_unprioritized(survey: Survey) -> int:
+    """Pair every image that has no pose prior with every other image.
+
+    Spatial matching only pairs images that have a prior position. Shots ARKit marked
+    `limited` get no prior (their VIO centre is not trusted), so spatial matching gave them zero
+    pairs and they could never register: object-orbit-2 stopped at 83/85 with the mapper log
+    reporting "connected 83". Matching them exhaustively costs at most n_missing * n pairs.
+    """
+    db = pycolmap.Database.open(survey.database)
+    try:
+        images = db.read_all_images()
+        with_prior = {p.corr_data_id.id for p in db.read_all_pose_priors()}
+    finally:
+        db.close()
+    missing = [im for im in images if im.data_id.id not in with_prior]
+    if not missing:
+        return 0
+    pairs = set()
+    for a in missing:
+        for b in images:
+            if a.image_id != b.image_id:
+                pairs.add(tuple(sorted((a.name, b.name))))
+    path = survey.model / "pairs_unprioritized.txt"
+    path.write_text("".join(f"{a} {b}\n" for a, b in sorted(pairs)))
+    imported = pycolmap.ImportedPairingOptions()
+    imported.match_list_path = str(path)
+    pycolmap.match_image_pairs(survey.database, pairing_options=imported)
+    log.info("matched %d images without pose priors exhaustively (%d pairs)", len(missing), len(pairs))
+    return len(missing)
+
+
 def match(survey: Survey, opts: SfmOptions, n_priors: int) -> str:
     n = len(survey.images())
     method = opts.matcher
@@ -168,6 +199,7 @@ def match(survey: Survey, opts: SfmOptions, n_priors: int) -> str:
         # would throw away a horizontal axis. Keep all three.
         pairing.ignore_z = False
         pycolmap.match_spatial(survey.database, pairing_options=pairing)
+        _match_unprioritized(survey)
     else:
         pycolmap.match_exhaustive(survey.database)
     return method
