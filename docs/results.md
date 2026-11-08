@@ -202,5 +202,27 @@ scaled gauge comes back on the truth to 1e-6 m with +Z up. A 1.5 m walk gives
 GPS heading but no tilt (heights off by one constant only). Writing it exposed a crash in
 `georef._gps_at` when a shot and the first GPS fix share a timestamp, now fixed in its own commit.
 
-<!-- section 4 -->
+## 4. Dense and mesh (issue #4): **skipped, no CUDA**
+
+COLMAP patch-match stereo is CUDA-only. This host is an Apple M6: `pycolmap.has_cuda` is `False`
+and there is no NVIDIA GPU, so no CUDA build of pycolmap 4.1.1 can be installed here, and calling
+the `colmap` CUDA binary isn't possible either. `sitemesh dense data/object-orbit-2` returns:
+
+```json
+{"status": "skipped",
+ "reason": "patch-match stereo needs CUDA (pycolmap.has_cuda is False on this host). Run `sitemesh dense <survey>` on a CUDA host.",
+ "depth_bounds_m_planned": [0.429, 12.146]}
+```
+
+- No `dense/fused.ply` or `dense/meshed-poisson.ply` was produced, and none is claimed.
+- **Not measured:** fused point count, mesh, dense timings, and whether the dense outputs share
+  `model.ply`'s frame (by construction they should: dense reads the georegistered `sparse/`).
+- `depth_bounds_m_planned` is computed on CPU from the sparse model (1st–99th percentile depth,
+  ±50%). These are the bounds a CUDA run would pass to patch-match.
+- `tests/test_dense.py` checks the no-CUDA path: status `skipped`, sane bounds, and no `dense/`
+  directory written.
+
+For the field agent: dense and mesh on this hardware need either a GPU host or a non-COLMAP
+Metal/CPU MVS. Neither was tried.
+
 <!-- section 5 -->

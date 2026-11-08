@@ -5,7 +5,8 @@ output frame (metres, Z up / ENU) with no refit.
 
 COLMAP's patch-match stereo is CUDA-only — `pycolmap.has_cuda` is False on Apple Silicon — so this
 stage runs on a CUDA host (the hydra-v2 GPU nodes, or any NVIDIA box with a CUDA pycolmap build).
-On a Mac, use tools/objectcapture for an on-site preview mesh; it is in its own frame, not ours.
+Without CUDA it returns `status: skipped` with the reason and the depth bounds a CUDA run would use;
+it never writes a placeholder cloud or mesh.
 
 Lessons carried over from hydra-vision:
   * explicit depth bounds per run, from the sparse points — a blank view otherwise aborts patch-match;
@@ -52,10 +53,12 @@ def run_dense(
     poisson_trim: float = 7.0,
 ) -> dict:
     if not pycolmap.has_cuda:
+        dmin, dmax = depth_bounds(rec)
         return {
             "status": "skipped",
-            "reason": "patch-match stereo needs CUDA (pycolmap.has_cuda is False). Run "
-            "`sitemesh dense <survey>` on a CUDA host; for a Mac preview use tools/objectcapture.",
+            "reason": "patch-match stereo needs CUDA (pycolmap.has_cuda is False on this host). "
+            "Run `sitemesh dense <survey>` on a CUDA host.",
+            "depth_bounds_m_planned": [dmin, dmax],
         }
     work = survey.model / "densework"
     out = survey.model / "dense"
