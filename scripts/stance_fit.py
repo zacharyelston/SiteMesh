@@ -31,11 +31,21 @@ def rows_for(path: Path) -> tuple[dict, list[dict]]:
     qc = stance_qc(track)
     rec = pycolmap.Reconstruction(s.sparse)
     rows = post_sfm_stance(track, rec, qc)
+    # incremental_mapping can split a capture into several disconnected models; sitemesh keeps the
+    # largest. A shot missing from it may still have reconstructed in a smaller one, which is a
+    # connectivity failure (no overlap across a transition), not a per-shot geometry failure.
+    in_any = set()
+    for sub in s.sparse.iterdir():
+        if sub.is_dir() and (sub / "images.bin").exists():
+            in_any |= {im.name for im in pycolmap.Reconstruction(sub).images.values()
+                       if im.has_pose}
     for r in rows:
         r["survey"] = path.name
+        r["in_any_model"] = r["registered"] or r["image"] in in_any
     reg = sum(r["registered"] for r in rows)
     summary = {
         "survey": path.name, "n": len(rows), "registered": reg,
+        "in_any_model": sum(r["in_any_model"] for r in rows),
         "qc_verdict": qc["summary"]["verdict"],
         "qc_median_d_over_b": qc["summary"]["median_d_over_b"],
         "frac_cross_parallax": qc["summary"]["frac_cross_parallax"],
@@ -50,8 +60,9 @@ def binned(rows: list[dict], key: str) -> list[dict]:
         sel = [r for r in rows if r.get(key) is not None and lo <= r[key] < hi]
         if sel:
             reg = sum(r["registered"] for r in sel)
+            anym = sum(r["in_any_model"] for r in sel)
             out.append({"bin": f"{lo:g}–{hi:g}", "n": len(sel), "registered": reg,
-                        "rate": reg / len(sel)})
+                        "rate": reg / len(sel), "in_any": anym})
     return out
 
 
@@ -59,15 +70,18 @@ def flags(rows: list[dict]) -> dict:
     counts: dict[str, list[int]] = {}
     for r in rows:
         for fl in r.get("qc_flags") or ["(none)"]:
-            c = counts.setdefault(fl, [0, 0])
+            c = counts.setdefault(fl, [0, 0, 0])
             c[0] += 1
             c[1] += r["registered"]
-    return {k: {"n": n, "registered": g} for k, (n, g) in sorted(counts.items())}
+            c[2] += r["in_any_model"]
+    return {k: {"n": n, "registered": g, "in_any": a} for k, (n, g, a) in sorted(counts.items())}
 
 
 def md_bins(title: str, b: list[dict]) -> str:
-    lines = [f"**{title}**", "", "| D/B | shots | registered | rate |", "|---|---|---|---|"]
-    lines += [f"| {x['bin']} | {x['n']} | {x['registered']} | {x['rate']:.0%} |" for x in b]
+    lines = [f"**{title}**", "", "| D/B | shots | in output model | rate | in any sub-model |",
+             "|---|---|---|---|---|"]
+    lines += [f"| {x['bin']} | {x['n']} | {x['registered']} | {x['rate']:.0%} | {x['in_any']} |"
+              for x in b]
     return "\n".join(lines)
 
 
@@ -81,10 +95,12 @@ def main() -> int:
         s, r = rows_for(p)
         summaries.append(s)
         rows += r
-    print("| survey | registered | QC verdict | QC median D/B | cross-parallax | flags |")
-    print("|---|---|---|---|---|---|")
+    print("| survey | in output model | in any sub-model | QC verdict | QC median D/B "
+          "| cross-parallax | flags |")
+    print("|---|---|---|---|---|---|---|")
     for s in summaries:
-        print(f"| {s['survey']} | {s['registered']}/{s['n']} | {s['qc_verdict']} "
+        print(f"| {s['survey']} | {s['registered']}/{s['n']} | {s['in_any_model']}/{s['n']} "
+              f"| {s['qc_verdict']} "
               f"| {s['qc_median_d_over_b']:.2f} | {s['frac_cross_parallax']:.0%} "
               f"| {s['flag_counts']} |")
     print()
@@ -95,13 +111,14 @@ def main() -> int:
     print()
     print(md_bins("Own measured D/B (registered shots only)", binned(rows, "measured_d_over_b")))
     print()
-    print("| QC flag | shots | registered |\n|---|---|---|")
+    print("| QC flag | shots | in output model | in any sub-model |\n|---|---|---|---|")
     for k, v in flags(rows).items():
-        print(f"| {k} | {v['n']} | {v['registered']} |")
+        print(f"| {k} | {v['n']} | {v['registered']} | {v['in_any']} |")
     unreg = [r for r in rows if not r["registered"]]
     print(f"\nunregistered shots: {len(unreg)}")
     for r in unreg:
-        print(f"  {r['survey']} {r['image']} tracking={r['tracking']} "
+        print(f"  {r['survey']} {r['image']} in_any_model={r['in_any_model']} "
+              f"tracking={r['tracking']} "
               f"qc_dob={r.get('qc_d_over_b')} nbr_dob={r.get('neighbour_d_over_b')} "
               f"flags={r.get('qc_flags')}")
     if args.json:
