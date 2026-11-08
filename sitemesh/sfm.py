@@ -41,6 +41,11 @@ class SfmOptions:
     focal_group_tol: float = 0.01  # ARKit fx varies with focus; group within 1%
     seed: int = 0
     num_threads: int = -1
+    # Feature/matching knobs, COLMAP defaults unless a measurement says otherwise.
+    sift_max_features: int = 8192
+    sift_affine: bool = False  # estimate_affine_shape: helps oblique views, CPU-slower
+    sift_dsp: bool = False  # domain_size_pooling
+    guided_matching: bool = False
 
 
 def _intrinsics_groups(survey: Survey, frames: dict[str, DevicePoseFrame], tol: float):
@@ -83,6 +88,9 @@ def extract(survey: Survey, opts: SfmOptions) -> dict:
     ext = pycolmap.FeatureExtractionOptions()
     ext.max_image_size = opts.max_image_size
     ext.num_threads = opts.num_threads
+    ext.sift.max_num_features = opts.sift_max_features
+    ext.sift.estimate_affine_shape = opts.sift_affine
+    ext.sift.domain_size_pooling = opts.sift_dsp
 
     groups = _intrinsics_groups(survey, frames, opts.focal_group_tol)
     cameras = []
@@ -153,35 +161,48 @@ def write_priors(survey: Survey, opts: SfmOptions) -> int:
     return n
 
 
-def _match_unprioritized(survey: Survey) -> int:
-    """Pair every image that has no pose prior with every other image.
+def _matching_options(opts: SfmOptions):
+    m = pycolmap.FeatureMatchingOptions()
+    m.num_threads = opts.num_threads
+    m.guided_matching = opts.guided_matching
+    return m
 
-    Spatial matching only pairs images that have a prior position. Shots ARKit marked
-    `limited` get no prior (their VIO centre is not trusted), so spatial matching gave them zero
-    pairs and they could never register: object-orbit-2 stopped at 83/85 with the mapper log
-    reporting "connected 83". Matching them exhaustively costs at most n_missing * n pairs.
+
+def spatial_pairs(
+    names: list[str],
+    positions: dict[str, np.ndarray],
+    k: int,
+    max_distance_m: float = 500.0,
+) -> set[tuple[str, str]]:
+    """Image pairs to match: k nearest prior positions, plus all pairs for images without one.
+
+    Replaces COLMAP 4.1.1's spatial pair generator, which aborted the process with
+    `std::out_of_range: vector` in about half of full pipeline runs (exit 134 in 3 of 6 identical
+    object-orbit runs), even after max_distance was cut from 1e6 to 500. The same neighbour rule
+    in numpy is deterministic and cheap: n is at most a few hundred stills.
+
+    Images with no prior (ARKit `limited` tracking: VIO centre not trusted) are paired with every
+    other image. COLMAP's generator gave them zero pairs, so they could never register
+    (object-orbit-2 stopped at 83/85, mapper log "connected 83").
     """
-    db = pycolmap.Database.open(survey.database)
-    try:
-        images = db.read_all_images()
-        with_prior = {p.corr_data_id.id for p in db.read_all_pose_priors()}
-    finally:
-        db.close()
-    missing = [im for im in images if im.data_id.id not in with_prior]
-    if not missing:
-        return 0
-    pairs = set()
-    for a in missing:
-        for b in images:
-            if a.image_id != b.image_id:
-                pairs.add(tuple(sorted((a.name, b.name))))
-    path = survey.model / "pairs_unprioritized.txt"
-    path.write_text("".join(f"{a} {b}\n" for a, b in sorted(pairs)))
-    imported = pycolmap.ImportedPairingOptions()
-    imported.match_list_path = str(path)
-    pycolmap.match_image_pairs(survey.database, pairing_options=imported)
-    log.info("matched %d images without pose priors exhaustively (%d pairs)", len(missing), len(pairs))
-    return len(missing)
+    pairs: set[tuple[str, str]] = set()
+    with_pos = [n for n in names if n in positions]
+    if with_pos:
+        xyz = np.array([positions[n] for n in with_pos], float)
+        dist = np.linalg.norm(xyz[:, None, :] - xyz[None, :, :], axis=2)
+        np.fill_diagonal(dist, np.inf)
+        kk = min(k, len(with_pos) - 1)
+        for i, name in enumerate(with_pos):
+            for j in np.argsort(dist[i], kind="stable")[:kk]:
+                if dist[i, j] <= max_distance_m:
+                    pairs.add(tuple(sorted((name, with_pos[j]))))
+    for a in names:
+        if a in positions:
+            continue
+        for b in names:
+            if a != b:
+                pairs.add(tuple(sorted((a, b))))
+    return pairs
 
 
 def match(survey: Survey, opts: SfmOptions, n_priors: int) -> str:
@@ -190,18 +211,33 @@ def match(survey: Survey, opts: SfmOptions, n_priors: int) -> str:
     if method == "auto":
         method = "spatial" if n_priors >= 3 and n > opts.exhaustive_below else "exhaustive"
     if method == "spatial":
-        pairing = pycolmap.SpatialPairingOptions()
-        pairing.max_num_neighbors = min(opts.spatial_neighbors, max(n - 1, 1))
-        # Neighbour count is the real limit. A huge radius (1e6) aborts COLMAP 4.1.1 with
-        # std::out_of_range, so keep a finite one that still covers any walkable site.
-        pairing.max_distance = 500.0
-        # Default ignore_z=True assumes Z is vertical (GPS). ARKit's vertical is Y, so ignoring Z
-        # would throw away a horizontal axis. Keep all three.
-        pairing.ignore_z = False
-        pycolmap.match_spatial(survey.database, pairing_options=pairing)
-        _match_unprioritized(survey)
+        # Pairs from the priors actually written to the database, in ARKit's frame. All three
+        # axes count: ARKit's vertical is Y, so a GPS-style "ignore Z" would drop a horizontal.
+        db = pycolmap.Database.open(survey.database)
+        try:
+            images = db.read_all_images()
+            by_data = {im.data_id.id: im.name for im in images}
+            positions = {
+                by_data[p.corr_data_id.id]: np.asarray(p.position, float)
+                for p in db.read_all_pose_priors()
+            }
+        finally:
+            db.close()
+        names = sorted(im.name for im in images)
+        pairs = spatial_pairs(names, positions, opts.spatial_neighbors)
+        path = survey.model / "pairs.txt"
+        path.write_text("".join(f"{a} {b}\n" for a, b in sorted(pairs)))
+        imported = pycolmap.ImportedPairingOptions()
+        imported.match_list_path = str(path)
+        pycolmap.match_image_pairs(
+            survey.database, matching_options=_matching_options(opts), pairing_options=imported
+        )
+        log.info(
+            "spatial matching: %d pairs, %d images without a prior paired exhaustively",
+            len(pairs), len(names) - len(positions),
+        )
     else:
-        pycolmap.match_exhaustive(survey.database)
+        pycolmap.match_exhaustive(survey.database, matching_options=_matching_options(opts))
     return method
 
 
