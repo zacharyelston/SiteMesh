@@ -8,3 +8,5 @@ data/
 *.ply
 *.db
 *.usdz
+bench/
+runs/
