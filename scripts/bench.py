@@ -43,17 +43,24 @@ def run_one(capture: Path, config: str, seed: int, extra: list[str]) -> dict:
         shutil.copy(capture / "poses.json", work / "poses.json")
     exe = Path(sys.executable).with_name("sitemesh")
     cmd = [str(exe), "sparse", str(work), "--seed", str(seed), *CONFIGS[config], *extra]
+    # macOS idle-sleeps a busy laptop: three of the first 22 runs had a single 3-9 minute gap in
+    # their log that matched `pmset -g log` sleep entries. Hold a no-idle-sleep assertion.
+    caffeinated = sys.platform == "darwin" and shutil.which("caffeinate") is not None
+    if caffeinated:
+        cmd = ["caffeinate", "-i", "-s", *cmd]  # -s: no system sleep on AC (pmset sleep=1 here)
     t0 = time.time()
     with open(work / "run.log", "w") as logf:
         proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT)
         _, status, usage = os.wait4(proc.pid, 0)
     wall = time.time() - t0
+    slept = sleeps_between(t0, t0 + wall)
     exit_code = os.waitstatus_to_exitcode(status)
     # ru_maxrss: bytes on macOS, KiB on Linux.
     rss = usage.ru_maxrss if sys.platform == "darwin" else usage.ru_maxrss * 1024
     row = {
-        "capture": capture.name, "config": config, "seed": seed, "cmd": cmd[1:],
-        "exit": exit_code, "wall_s": wall, "peak_rss_gb": rss / 1e9,
+        "capture": capture.name, "config": config, "seed": seed, "cmd": cmd,
+        "caffeinated": caffeinated, "started_at": t0,
+        "exit": exit_code, "wall_s": wall, "peak_rss_gb": rss / 1e9, "slept": slept,
         "host": f"{platform.machine()} {platform.processor() or ''}".strip(),
     }
     report_path = work / "model" / "report.json"
@@ -76,6 +83,47 @@ def run_one(capture: Path, config: str, seed: int, extra: list[str]) -> dict:
     return row
 
 
+def sleeps_between(t0: float, t1: float) -> list[str] | None:
+    """macOS sleep entries from `pmset -g log` inside [t0, t1]; None where not available.
+
+    A run that spans a sleep has a wall time that measures the sleep, so such rows are flagged
+    in the table instead of reported as compute time.
+    """
+    if sys.platform != "darwin":
+        return None
+    from datetime import datetime
+
+    try:
+        out = subprocess.run(["pmset", "-g", "log"], check=False, capture_output=True, text=True,
+                             timeout=60).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    hits = []
+    for line in out.splitlines():
+        if "Entering Sleep" not in line and "DarkWake from" not in line:
+            continue
+        try:
+            ts = datetime.strptime(line[:25], "%Y-%m-%d %H:%M:%S %z").timestamp()
+        except ValueError:
+            continue
+        if t0 <= ts <= t1:
+            hits.append(line[:19] + " " + line[26:60].strip())
+    return hits
+
+
+def _log_window(log: str) -> tuple[float, float] | None:
+    """First and last glog timestamps (local time) of a run log."""
+    import re
+    from datetime import datetime
+
+    stamps = re.findall(r"^I(\d{8} \d\d:\d\d:\d\d)", log, re.MULTILINE)
+    if not stamps:
+        return None
+    f = "%Y%m%d %H:%M:%S"
+    return (datetime.strptime(stamps[0], f).timestamp(),
+            datetime.strptime(stamps[-1], f).timestamp())
+
+
 def _mapper_priors(log: str) -> int | None:
     """The mapper's own count from 'Loading pose priors...' followed by ' <n> in <t>s'."""
     lines = log.splitlines()
@@ -91,7 +139,12 @@ def load() -> list[dict]:
     path = bench_dir() / "results.jsonl"
     if not path.exists():
         return []
-    return [json.loads(x) for x in path.read_text().splitlines() if x.strip()]
+    latest: dict = {}
+    for x in path.read_text().splitlines():
+        if x.strip():
+            r = json.loads(x)
+            latest[(r["capture"], r["config"], r["seed"])] = r  # a re-run replaces the old row
+    return list(latest.values())
 
 
 def focal_pairs(row: dict) -> str:
@@ -112,6 +165,8 @@ def table(rows: list[dict]) -> str:
                        f"{r['exit']})** |" + " |" * 11)
             continue
         s = r["seconds"]
+        if r.get("slept"):
+            r = {**r, "config": r["config"] + " ⚠ slept"}
         out.append(
             f"| {r['capture']} | {r['config']} | {r['seed']} "
             f"| {r['n_registered']}/{r['n_photos']} | {r['n_points3d']:,} | {r['reproj_px']:.3f} "
@@ -130,12 +185,24 @@ def main() -> int:
     ap.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2])
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--table", action="store_true")
+    ap.add_argument("--check-sleep", action="store_true",
+                    help="back-fill the `slept` field from each run.log's time window")
     ap.add_argument("--extra", default="", help="extra flags for sitemesh sparse, one string")
     args = ap.parse_args()
     if args.table:
         order = {c: i for i, c in enumerate(CONFIGS)}
         rows = sorted(load(), key=lambda r: (r["capture"], order[r["config"]], r["seed"]))
         print(table(rows))
+        return 0
+    if args.check_sleep:
+        rows = load()
+        for r in rows:
+            log = bench_dir() / f"{r['capture']}__{r['config']}__s{r['seed']}" / "run.log"
+            win = _log_window(log.read_text()) if log.exists() else None
+            if win:
+                r["slept"] = sleeps_between(*win)
+            print(r["capture"], r["config"], r["seed"], "slept:", r.get("slept"))
+        (bench_dir() / "results.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
         return 0
     extra = args.extra.split()
     bench_dir().mkdir(parents=True, exist_ok=True)
