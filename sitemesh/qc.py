@@ -145,21 +145,33 @@ def _verdict(counts: dict[str, int], n: int) -> str:
     return "ok"
 
 
-def post_sfm_stance(track: DevicePoseTrack, rec) -> list[dict]:
+def post_sfm_stance(track: DevicePoseTrack, rec, qc: dict | None = None, window: int = 2) -> list[dict]:
     """Per-shot table joining capture geometry to what SfM made of it.
 
-    `measured_depth_m` is the median depth of the shot's own triangulated points — the real subject
-    distance — so the D/B envelope can be re-fit from data instead of the card's derivation.
+    `measured_depth_m` is the median depth of the shot's own triangulated points, i.e. the real
+    subject distance, so the D/B envelope can be re-fit from data instead of the card's
+    derivation. A shot that failed to register has no points of its own, which would hide exactly
+    the shots the fit is about. So every row also gets `neighbour_depth_m`: the median measured
+    depth of registered shots within `window` places in capture order (never the shot itself).
+    `neighbour_d_over_b` uses it, and is defined the same way for registered and unregistered
+    shots. `qc_d_over_b` / `qc_flags` are what the on-site check predicted from poses.json alone.
     """
     reg = {im.name: im for im in rec.images.values() if im.has_pose}
+    qc_by = {s["image"]: s for s in (qc or {}).get("shots", [])}
+    shots = track.shots()
     rows = []
     prev_centre = None
-    for f in track.shots():
+    for f in shots:
         centre = np.array(f.position_m)
         base = float(np.linalg.norm(centre - prev_centre)) if prev_centre is not None else None
         prev_centre = centre
         im = reg.get(f.image)
-        row = {"image": f.image, "registered": im is not None, "baseline_m": base}
+        row = {"image": f.image, "registered": im is not None, "baseline_m": base,
+               "tracking": f.tracking_state}
+        q = qc_by.get(f.image)
+        if q is not None:
+            row["qc_d_over_b"] = q.get("d_over_b")
+            row["qc_flags"] = q.get("flags", [])
         if im is not None:
             cam_from_world = im.cam_from_world()
             depths = [
@@ -173,4 +185,12 @@ def post_sfm_stance(track: DevicePoseTrack, rec) -> list[dict]:
                 if base:
                     row["measured_d_over_b"] = row["measured_depth_m"] / base
         rows.append(row)
+    for i, row in enumerate(rows):
+        lo, hi = max(0, i - window), min(len(rows), i + window + 1)
+        nbr = [rows[j]["measured_depth_m"] for j in range(lo, hi)
+               if j != i and "measured_depth_m" in rows[j]]
+        if nbr:
+            row["neighbour_depth_m"] = float(np.median(nbr))
+            if row["baseline_m"]:
+                row["neighbour_d_over_b"] = row["neighbour_depth_m"] / row["baseline_m"]
     return rows

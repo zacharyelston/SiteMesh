@@ -59,3 +59,37 @@ def test_wrist_pivots_are_flagged():
     result = stance_qc(DevicePoseTrack(source="arkit", frames=frames))
     assert result["summary"]["flag_counts"]["wrist_pivot"] == 9
     assert result["summary"]["verdict"].startswith("re-shoot")
+
+
+def test_post_sfm_stance_gives_unregistered_shots_a_neighbour_d_over_b():
+    import pycolmap
+
+    from sitemesh.qc import post_sfm_stance
+
+    opts = pycolmap.SyntheticDatasetOptions()
+    opts.num_rigs = 1
+    opts.num_frames_per_rig = 6
+    opts.num_points3D = 60
+    rec = pycolmap.synthesize_dataset(opts)
+    ims = sorted(rec.images.values(), key=lambda im: im.name)
+    centres = [np.array(im.projection_center()) for im in ims]
+    frames = [
+        DevicePoseFrame(timestamp=float(i), image=im.name, position_m=tuple(c),
+                        rotation_xyzw=(0.0, 0.0, 0.0, 1.0))
+        for i, (im, c) in enumerate(zip(ims, centres))
+    ]
+    track = DevicePoseTrack(source="arkit", frames=frames)
+    dropped = ims[3]
+    rec.deregister_frame(dropped.frame_id)
+
+    qc = {"shots": [{"image": ims[3].name, "d_over_b": 1.5, "flags": ["too_wide"]}]}
+    rows = {r["image"]: r for r in post_sfm_stance(track, rec, qc)}
+
+    gone = rows[dropped.name]
+    assert not gone["registered"] and "measured_depth_m" not in gone
+    assert gone["qc_d_over_b"] == 1.5 and gone["qc_flags"] == ["too_wide"]
+    expect = np.median([rows[ims[j].name]["measured_depth_m"] for j in (1, 2, 4, 5)])
+    assert gone["neighbour_depth_m"] == expect
+    assert gone["neighbour_d_over_b"] == expect / gone["baseline_m"]
+    # registered shots get the same neighbour-based estimate, excluding themselves
+    assert "neighbour_d_over_b" in rows[ims[2].name]
