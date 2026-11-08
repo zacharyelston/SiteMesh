@@ -225,4 +225,94 @@ the `colmap` CUDA binary isn't possible either. `sitemesh dense data/object-orbi
 For the field agent: dense and mesh on this hardware need either a GPU host or a non-COLMAP
 Metal/CPU MVS. Neither was tried.
 
-<!-- section 5 -->
+## 5. Stance envelope from data (issue #5)
+
+`python scripts/stance_fit.py bench/<capture>__priors_spatial__s0 ...` over all four captures
+(292 shots, default config, seed 0). "In output model" means the shot is in the model sitemesh
+writes (the largest). "In any sub-model" means COLMAP reconstructed it in some disconnected
+piece.
+
+| capture | in output model | in any sub-model | QC verdict | QC median D/B | cross-parallax |
+|---|---|---|---|---|---|
+| object-orbit-2 | 85/85 | 85/85 | ok | 3.63 | 99% |
+| object-orbit | 44/44 | 44/44 | ok | 4.13 | 100% |
+| d4737a5d | 53/86 | 80/86 | marginal | 0.96 | 97% |
+| b8b8ebd7 | 22/77 | 47/77 | marginal | 3.53 | 48% |
+
+### D/B against registration
+
+D/B as the QC computes it from `poses.json` before SfM: subject distance by ray convergence ÷
+baseline to the previous shot. This is what the on-site check and `StanceLimits` use. Available
+for 185 of 292 shots.
+
+| QC D/B | shots | in output model | rate | in any sub-model |
+|---|---|---|---|---|
+| 0–1 | 13 | 1 | 8% | 4 (31%) |
+| 1–1.5 | 11 | 5 | 45% | 8 (73%) |
+| 1.5–2 | 11 | 7 | 64% | 8 (73%) |
+| 2–3 | 34 | 30 | 88% | 32 (94%) |
+| 3–4 | 37 | 34 | 92% | 36 (97%) |
+| 4–6 | 54 | 46 | 85% | 51 (94%) |
+| 6–10 | 17 | 14 | 82% | 15 (88%) |
+| 10–15 | 6 | 1 | 17% | 5 (83%) |
+| 15+ | 2 | 1 | 50% | 1 |
+
+Cross-check with D/B from the reconstruction: median triangulated depth of registered shots
+within ±2 in capture order ÷ VIO baseline. Defined for registered and unregistered shots alike;
+available for 217 shots:
+
+| measured D/B | shots | in output model | rate |
+|---|---|---|---|
+| < 1.5 | 5 | 1 | 20% |
+| 1.5–2 | 5 | 4 | 80% |
+| 2–3 | 27 | 23 | 85% |
+| 3–6 | 96 | 93 | 97% |
+| 6–15 | 61 | 56 | 92% |
+| 15+ | 23 | 21 | 91% |
+
+**Where registration falls off:** below **D/B ≈ 2**, and steeply below 1.5. From 2 to 10,
+registration is flat at 82–92% (88–97% counting sub-models), so the 2–3 band does as well as the
+card's ÷6 target. The card's "closer than ÷3 breaks matching" bound is too strict by this data.
+Below 2 it drops to 64%, then 45%, then 8%. The hedge `StanceLimits.min_d_over_b = 2.0` sits at
+the measured knee.
+
+**`StanceLimits` defaults are unchanged.** `min_d_over_b = 2.0` matches the data. The upper bound
+`max_d_over_b = 15` can't be re-fit: only 8 shots fall above 10, and their misses are
+connectivity (5 of 6 in the 10–15 band reconstructed in a sub-model).
+
+Caveats: the D/B < 2 bins hold 35 shots, mostly from d4737a5d and b8b8ebd7. The baseline is to
+the previous shot in capture order, not to the best-overlapping shot. One seed per capture.
+
+### Did the QC predict the outcome?
+
+- **Verdict:** ranks correctly. `ok` gave 100% and 100%; `marginal` gave 62% (d4737a5d) and 29%
+  (b8b8ebd7). But "marginal: expect some unregistered shots" badly undersells b8b8ebd7, where 71%
+  of shots missed the output model.
+- **Per-shot flags:**
+
+| QC flag | shots | in output model | in any sub-model |
+|---|---|---|---|
+| (none) | 215 | 179 (83%) | 208 (97%) |
+| `too_wide` (D/B < 2) | 35 | 13 (37%) | 20 (57%) |
+| `no_cross_parallax` | 44 | 7 (16%) | 24 (55%) |
+| `tracking_limited` | 6 | 5 | 5 |
+| `wrist_pivot` | 2 | 2 | 2 |
+| `too_tight` | 2 | 1 | 1 |
+
+  `no_cross_parallax` is the strongest per-shot predictor of missing the output model (16%
+  against 83% unflagged), but `_verdict` ignores it ("informational"). On b8b8ebd7 it flags 40 of
+  77 shots. Counting it in the verdict would have called b8b8ebd7 a re-shoot. **Not changed
+  here**: it rests on one capture.
+- **Coverage gap:** the QC estimated subject distance for only **11 of 86** d4737a5d shots (ray
+  convergence fails on near-parallel views), so its "median D/B ≈ 1" headline rests on 13% of the
+  capture.
+
+### What the hard captures need (not implemented)
+
+Most "failures" on the hard captures are **connectivity, not per-shot geometry**. d4737a5d
+reconstructed 80/86 shots in three pieces (shots 2–15, 17–71, 73–86); b8b8ebd7 reconstructed
+47/77 in four. With pose priors every piece is solved in the same metric ARKit frame
+(`sfm_to_device_scale` = 1.000), so the pieces could be merged by transform with no shared
+features: 53 → 80 on d4737a5d. That's the strongest argument found for the priors, and the
+recommended next step.
+

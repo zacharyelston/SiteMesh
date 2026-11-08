@@ -56,7 +56,7 @@ def run_sparse(survey: Survey, opts: SfmOptions | None = None, scale_tags: bool 
         "qc": qc.get("summary"),
     }
     if track is not None:
-        survey.write_json("stance_vs_registration.json", post_sfm_stance(track, rec))
+        survey.write_json("stance_vs_registration.json", post_sfm_stance(track, rec, qc))
     if scale_tags:
         report["scale_check"] = scale_check(rec, survey.raw)
     report["gate"] = evaluate(report)
