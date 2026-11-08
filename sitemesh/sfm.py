@@ -43,7 +43,11 @@ class SfmOptions:
     num_threads: int = -1
     # Feature/matching knobs, COLMAP defaults unless a measurement says otherwise.
     sift_max_features: int = 8192
-    sift_affine: bool = False  # estimate_affine_shape: helps oblique views, CPU-slower
+    # estimate_affine_shape: on object-orbit, IMG_0027-0030 (blurred, oblique) only register with
+    # it: 40/44 -> 44/44 on seeds 0-2, 0.873 -> 0.94 px. Cost: extraction 26 s -> 48 s on the
+    # 85-shot object-orbit-2 (M6 CPU), ~unchanged on object-orbit.
+    # object-orbit-2 stays 85/85. Measurements in docs/results.md.
+    sift_affine: bool = True
     sift_dsp: bool = False  # domain_size_pooling
     guided_matching: bool = False
 
