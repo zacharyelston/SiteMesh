@@ -167,6 +167,40 @@ capture 19 s. Extraction and matching dominate; mapping is under 10 s.
   There's no flag for it yet.
 - Reproducibility on another machine: every number here is from one M6.
 
-<!-- section 3 -->
+## 3. Output frame (issue #3)
+
+`python scripts/frame_check.py <survey>` on the seed-0 default models (`bench/<capture>__priors_spatial__s0`):
+
+| check | object-orbit-2 | object-orbit |
+|---|---|---|
+| `output_frame` | `enu_position_only` | `enu_position_only` |
+| `heading` | `arbitrary (walked 1.7 m < 3.0 m)` | `arbitrary (walked 0.9 m < 3.0 m)` |
+| GPS yaw-fit RMS (reported, not applied) | 2.34 m | 0.59 m |
+| `sfm_to_device_scale` | 1.000 | 1.000 |
+| dominant horizontal plane | carpet floor: 8,775 of 14,412 points within ±3 cm | desk top: 3,166 of 5,016 points |
+| plane tilt from +Z | **0.09°** | **1.57°** |
+| camera height above that plane | 0.74 / 1.11 / 1.55 m (min / median / max) | 0.14 / 0.42 / 0.64 m |
+| mean camera pitch | −32° (looking down) | −44° |
+
+- **Metric and Z-up.** The floor in object-orbit-2 is level to 0.09°, and hand-held camera
+  heights of 0.7–1.6 m above it are plausible. object-orbit's dominant plane is the desk the object
+  sits on; cameras 0.1–0.6 m above it match leaning over a desk. Its 1.57° tilt is measured as-is;
+  a real desk or ARKit's gravity estimate could account for it, and neither was checked.
+- **Upright.** A side view of object-orbit-2's `model.ply` (X across, Z up, `--png`) shows a flat
+  floor with the ottoman, bottle and crate standing on it. Colour-selected yellow bottle points sit
+  0.40–0.59 m above the floor, consistent with a bottle on a ~0.45 m pouf. Nothing was
+  tape-measured, so this is a sanity check, not a scale verification.
+- **`output_frame` is honest for short walks.** Both walked under the 3 m threshold, so GPS sets
+  position only and the heading is reported as arbitrary. A GPS heading fit would have used fixes
+  whose RMS error (2.3 m) exceeds the walk.
+- `model.ply`, `cameras.json` and `sparse/` are all written after `georegister` transforms the
+  reconstruction (`pipeline.run_sparse`), so they share this frame.
+
+**Unit test** `tests/test_georef.py`: a synthetic reconstruction pushed into a 50° tilted, 0.37×
+scaled gauge comes back on the truth to 1e-6 m with +Z up. A 1.5 m walk gives
+`enu_position_only` with no rotation applied. A 20 m walk with 8 m GPS altitude noise gets the
+GPS heading but no tilt (heights off by one constant only). Writing it exposed a crash in
+`georef._gps_at` when a shot and the first GPS fix share a timestamp, now fixed in its own commit.
+
 <!-- section 4 -->
 <!-- section 5 -->
