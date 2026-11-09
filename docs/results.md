@@ -398,9 +398,9 @@ Seed 0, default config, after the change (`SITEMESH_BENCH_DIR=bench-gate`):
 
 | capture | registered | scene diagonal | VIO RMS | **rel** | reproj px | rot ° | verdict (before → after) |
 |---|---|---|---|---|---|---|---|
-| object-orbit-2 | 85/85 | 7.7 m | 20.1 mm | **0.26%** | 0.822 | 0.44 | fail → **pass_unverified** |
-| object-orbit | 44/44 | 3.0 m | 5.1 mm | **0.17%** | 0.937 | 0.63 | pass_unverified → pass_unverified |
-| d4737a5d | 80/86 | 22.1 m | 19.6 mm | **0.09%** | 0.996 | 0.99 | fail → fail (registration 93%) |
+| object-orbit-2 | 85/85 | 7.7 m | 20.2 mm | **0.26%** | 0.822 | 0.44 | fail → **pass_unverified** |
+| object-orbit | 44/44 | 3.0 m | 5.2 mm | **0.17%** | 0.937 | 0.63 | pass_unverified → pass_unverified |
+| d4737a5d | 80/86 | 22.1 m | 19.5 mm | **0.09%** | 0.996 | 0.99 | fail → fail (registration 93%) |
 | b8b8ebd7 | 47/77 | 45.8 m | 90.2 mm | **0.20%** | 0.845 | 0.55 | fail → fail (registration 61%) |
 
 `pass_unverified` means every measured check passed but the AprilTag scale check is
