@@ -164,17 +164,9 @@ def run_pair(rec, survey, i, j, obs, scale, max_disp_cap, swapped=False):
 
 
 def read_ply(path) -> np.ndarray:
-    """XYZ from a binary PLY written by write_ply (or COLMAP's export_PLY)."""
-    with open(path, "rb") as fh:
-        header = b""
-        while not header.endswith(b"end_header\n"):
-            header += fh.readline()
-        lines = header.split(b"\n")
-        n = int(next(x for x in lines if x.startswith(b"element vertex")).split()[-1])
-        props = [x.split()[-1].decode() for x in lines if x.startswith(b"property")]
-        dt = [(k, "<f4") if k in ("x", "y", "z") else (k, "u1") for k in props]
-        a = np.frombuffer(fh.read(n * np.dtype(dt).itemsize), dtype=dt)
-    return np.stack([a["x"], a["y"], a["z"]], 1).astype(float)
+    from sitemesh.plyio import read_ply_xyz
+
+    return read_ply_xyz(path)
 
 
 def write_ply(path, pts, cols):

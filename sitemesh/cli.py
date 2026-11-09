@@ -25,9 +25,13 @@ def main(argv: list[str] | None = None) -> int:
         ("dense", "patch-match + fusion + Poisson on an existing sparse model (CUDA)"),
         ("run", "sparse, then dense if CUDA is available"),
         ("scalecheck", "re-run the AprilTag scale check on an existing sparse model"),
+        ("measure", "bulk measures (extent, levels, heights, sections) + GPS scale check"),
     ]:
         p = sub.add_parser(name, help=help_)
         p.add_argument("survey")
+        if name == "measure":
+            p.add_argument("--dense", action="store_true",
+                           help="also use model/dense_cpu/fused.ply if present")
         if name in ("sparse", "run"):
             p.add_argument("--matcher", default="auto", choices=["auto", "spatial", "exhaustive"])
             p.add_argument("--no-priors", action="store_true", help="ignore poses.json in SfM")
@@ -82,6 +86,13 @@ def main(argv: list[str] | None = None) -> int:
 
         _print(run_dense_stage(survey))
         return 0
+
+    if args.cmd == "measure":
+        from sitemesh.measure import run_measure
+
+        m = run_measure(survey, dense=args.dense)
+        print((survey.model / "measures.md").read_text())
+        return 0 if m["scale"]["metric"] else 2
 
     if args.cmd == "scalecheck":
         import pycolmap
