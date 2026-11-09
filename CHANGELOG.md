@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased: experiments with the existing captures (2026-11-08)
+
+Exploratory only; no pipeline default changed. Details: `docs/experiments.md`.
+
+### Added
+- `scripts/dense_cpu.py`: CPU dense-lite (OpenCV SGBM on pose-rectified pairs, validated against
+  sparse points, multi-view fused). 1.1–2.7× sparse density at 0.3–1.4% depth error in ≤ 15 s on
+  the M6, where shot spacing allows.
+- `scripts/experiments.py`: timing, drift, gps-scale, waterline, corridor, recover.
+
+### Verified
+- The ~20 mm VIO residual is slow drift (residuals smooth in capture order; removing the trend
+  halves them), not pose timing (best offset 0 s) and not device motion.
+- Outdoors, GPS independently confirms metric scale: 1.033 [0.977, 1.077] on b8b8ebd7.
+- Corridor ceiling height reads 2.78 m, consistent to ±2 cm along 14 m.
+
+### Not verified
+- No measured length is tape-checked. Pool waterline level within ±0.6° only. PnP recovers 4 of 36
+  missing shots; the rest share no features with the model.
+
 ## 0.1.3: site-relative alignment gate (2026-11-08)
 
 ### Changed
