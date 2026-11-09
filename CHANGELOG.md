@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.3: site-relative alignment gate (2026-11-08)
+
+### Changed
+- **Gate:** the absolute `device_alignment_rms_m ≤ 10 mm` check is replaced by
+  `device_alignment_rel` = VIO RMS ÷ `scene_diagonal_m` ≤ 0.5% (owner decision: site surveys need
+  bulk measures). Measured 0.09–0.26% on all four captures. The absolute RMS is still reported.
+
+### Verified
+- object-orbit-2 gate fail → `pass_unverified`; the hard captures now fail only on registration.
+- Missing scene size → `not_measured`, never a pass (unit-tested).
+
+### Not verified
+- 0.5% is a tolerance choice, not derived from survey requirements in writing.
+
 ## 0.1.2: merge disconnected sub-models (2026-11-08)
 
 ### Added

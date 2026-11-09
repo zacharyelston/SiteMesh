@@ -13,7 +13,11 @@ from dataclasses import asdict, dataclass
 class Gate:
     min_registration: float = 0.98
     max_reprojection_px: float = 1.0
-    max_device_alignment_rms_m: float = 0.01
+    # VIO alignment RMS as a fraction of the scene's horizontal diagonal. Was an absolute 10 mm,
+    # which suits object scans, not 20-50 m sites where bulk measures are the deliverable. On
+    # the four reference captures this ratio is 0.09-0.26% (docs/results.md §6); 0.5% is the
+    # owner's survey tolerance. The absolute RMS is still reported, just not gated.
+    max_device_alignment_rel: float = 0.005
     max_device_rotation_rms_deg: float = 2.0
     max_scale_error_pct: float = 0.5
 
@@ -36,8 +40,9 @@ def evaluate(report: dict, gate: Gate | None = None) -> dict:
           f">= {gate.min_registration:.0%}")
     check("mean_reprojection_px", report.get("mean_reprojection_px"),
           lambda v: v <= gate.max_reprojection_px, f"<= {gate.max_reprojection_px}")
-    check("device_alignment_rms_m", report.get("device_alignment_rms_m"),
-          lambda v: v <= gate.max_device_alignment_rms_m, f"<= {gate.max_device_alignment_rms_m}")
+    rms, diag = report.get("device_alignment_rms_m"), report.get("scene_diagonal_m")
+    check("device_alignment_rel", rms / diag if rms is not None and diag else None,
+          lambda v: v <= gate.max_device_alignment_rel, f"<= {gate.max_device_alignment_rel:.1%}")
     check("device_rotation_rms_deg", report.get("device_rotation_rms_deg"),
           lambda v: v <= gate.max_device_rotation_rms_deg, f"<= {gate.max_device_rotation_rms_deg}")
     sc = report.get("scale_check", {}).get("summary", {}).get("scale_check_error_pct")

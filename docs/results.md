@@ -385,3 +385,25 @@ percentile extent of the merged point cloud.
   could be placed from VIO and triangulated against neighbours. Not tried.
 - The gate's 10 mm VIO target suits object scans, not 20–50 m sites. A relative target
   (RMS / scene size) would match how bulk measures are used. Not changed without a decision.
+
+## 7. Gate: site-relative alignment (issue #16)
+
+Owner decision: for site surveys the gate judges VIO alignment relative to the site, not in
+absolute millimetres. `Gate.max_device_alignment_rms_m = 0.01` is replaced by
+`max_device_alignment_rel = 0.005`: VIO RMS ÷ `scene_diagonal_m`, the horizontal 2nd–98th
+percentile extent of the output cloud. Both numbers are in `report.json`. The absolute RMS is
+still reported but no longer gated. No scene size means `not_measured`, never a pass.
+
+Seed 0, default config, after the change (`SITEMESH_BENCH_DIR=bench-gate`):
+
+| capture | registered | scene diagonal | VIO RMS | **rel** | reproj px | rot ° | verdict (before → after) |
+|---|---|---|---|---|---|---|---|
+| object-orbit-2 | 85/85 | 7.7 m | 20.2 mm | **0.26%** | 0.822 | 0.44 | fail → **pass_unverified** |
+| object-orbit | 44/44 | 3.0 m | 5.2 mm | **0.17%** | 0.937 | 0.63 | pass_unverified → pass_unverified |
+| d4737a5d | 80/86 | 22.1 m | 19.5 mm | **0.09%** | 0.996 | 0.99 | fail → fail (registration 93%) |
+| b8b8ebd7 | 47/77 | 45.8 m | 90.2 mm | **0.20%** | 0.845 | 0.55 | fail → fail (registration 61%) |
+
+`pass_unverified` means every measured check passed but the AprilTag scale check is
+`not_measured`; no capture can reach a full `pass` without printed tags. The hard captures now
+fail only on registration (98% target, unchanged). d4737a5d's reprojection (0.996 px) sits just
+under the 1.0 px limit.

@@ -6,6 +6,8 @@ import json
 import logging
 import time
 
+import numpy as np
+
 from sitemesh import __version__
 from sitemesh.contracts import Survey
 from sitemesh.dense import run_dense
@@ -25,6 +27,15 @@ def run_qc(survey: Survey) -> dict:
     result = stance_qc(track)
     survey.write_json("qc.json", result)
     return result
+
+
+def scene_diagonal_m(rec) -> float | None:
+    """Horizontal size of the scene: 2nd-98th percentile XY extent of the output cloud, in m."""
+    if rec.num_points3D() < 10:
+        return None
+    xy = np.array([p.xyz[:2] for p in rec.points3D.values()])
+    lo, hi = np.percentile(xy, [2, 98], axis=0)
+    return float(np.linalg.norm(hi - lo))
 
 
 def run_sparse(survey: Survey, opts: SfmOptions | None = None, scale_tags: bool = True) -> dict:
@@ -53,6 +64,7 @@ def run_sparse(survey: Survey, opts: SfmOptions | None = None, scale_tags: bool 
         "sfm_options": info["options"],
         **{k: v for k, v in agree.items() if k.startswith("device_rotation")},
         **geo,
+        "scene_diagonal_m": scene_diagonal_m(rec) if geo.get("scale_source") else None,
         "qc": qc.get("summary"),
     }
     if track is not None:

@@ -71,7 +71,8 @@ def main(argv: list[str] | None = None) -> int:
         report = run_sparse(survey, opts)
         _print({k: report.get(k) for k in (
             "n_photos", "n_registered", "n_points3d", "mean_reprojection_px", "matcher",
-            "device_alignment_rms_m", "device_rotation_rms_deg", "output_frame", "gate")})
+            "device_alignment_rms_m", "scene_diagonal_m", "device_rotation_rms_deg",
+            "output_frame", "gate")})
         if args.cmd == "run":
             _print(run_dense_stage(survey))
         return 0 if report["gate"]["verdict"] != "fail" else 2
