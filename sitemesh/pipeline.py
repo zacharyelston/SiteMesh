@@ -12,6 +12,8 @@ from sitemesh import __version__
 from sitemesh.contracts import Survey
 from sitemesh.dense import run_dense
 from sitemesh.georef import georegister
+from sitemesh.gpscheck import gps_scale_check
+from sitemesh.measure import run_measure
 from sitemesh.qc import post_sfm_stance, stance_qc
 from sitemesh.report import evaluate
 from sitemesh.scalecheck import scale_check
@@ -66,6 +68,7 @@ def run_sparse(survey: Survey, opts: SfmOptions | None = None, scale_tags: bool 
         **geo,
         "scene_diagonal_m": scene_diagonal_m(rec) if geo.get("scale_source") else None,
         "qc": qc.get("summary"),
+        "gps_scale_check": gps_scale_check(track),
     }
     if track is not None:
         survey.write_json("stance_vs_registration.json", post_sfm_stance(track, rec, qc))
@@ -74,6 +77,11 @@ def run_sparse(survey: Survey, opts: SfmOptions | None = None, scale_tags: bool 
     report["gate"] = evaluate(report)
     report["seconds_total"] = time.time() - t0
     survey.write_json("report.json", report)
+    try:
+        run_measure(survey)  # bulk measures: measures.json / measures.md
+    except (ValueError, RuntimeError, OSError, IndexError, np.linalg.LinAlgError) as exc:
+        # measures must never sink a finished reconstruction
+        log.warning("bulk measures failed: %s", exc)
     return report
 
 

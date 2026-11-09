@@ -12,3 +12,4 @@ bench/
 runs/
 bench-merge/
 bench-gate/
+bench-measure/

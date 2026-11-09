@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.4: bulk measures with GPS scale check (2026-11-08)
+
+### Added
+- `sitemesh measure <survey> [--dense]` and automatic `model/measures.{json,md}` after `sparse`:
+  site extent (occupied voxels), footprint, horizontal levels, ceiling, heights, camera path,
+  height/width cross-sections along the main axis. Details: `docs/measures.md`.
+- `sitemesh/gpscheck.py`: GPS scale evidence in `report.json` → `gps_scale_check`, and in the
+  measures' scale basis. `not_applicable` with a reason for short, sparse or indoor GPS. Not a
+  gate check.
+
+### Verified
+- Heights and levels repeat within 1–2 cm across seeds (corridor ceiling 2.73–2.74 m).
+- GPS check: consistent on b8b8ebd7 (1.033 [0.977, 1.077]); correctly refuses the other three.
+- Synthetic room: dimensions, levels and width recovered; GPS check recovers a 1.3× scale error.
+
+### Not verified
+- No measure is tape-checked. Clear width is never reported on the real captures (walls too
+  sparse). Extents include background and move with registration coverage.
+
 ## Unreleased: experiments with the existing captures (2026-11-08)
 
 Exploratory only; no pipeline default changed. Details: `docs/experiments.md`.
